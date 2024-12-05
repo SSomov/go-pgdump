@@ -76,10 +76,10 @@ func (d *Dumper) DumpDatabase(outputFile string, opts *TableOptions) error {
 			go func(table string) {
 				defer wg.Done()
 				str, err := scriptTable(db, table)
+				fmt.Printf("content table %s:\n%s\n", table, err)
 				if err != nil {
 					return
 				}
-				fmt.Printf("content table %s:\n%s\n", table, str)
 				mx.Lock()
 				file.WriteString(str)
 				mx.Unlock()
