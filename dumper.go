@@ -62,7 +62,11 @@ func (d *Dumper) DumpDatabase(outputFile string, opts *TableOptions) error {
 	if err != nil {
 		return err
 	}
-
+	
+	for _, table := range tables {
+	    fmt.Println(table)
+	}
+	
 	var (
 		wg sync.WaitGroup
 		mx sync.Mutex
