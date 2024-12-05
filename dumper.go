@@ -17,81 +17,93 @@ import (
 )
 
 type Dumper struct {
-	ConnectionString string
-	Parallels        int
-	DumpVersion      string
+    ConnectionString string
+    Parallels        int
+    DumpVersion      string
 }
 
 func NewDumper(connectionString string, threads int) *Dumper {
-	// Version number of go-pgdump, used in the template after a dump
-	dumpVersion := "0.2.1"
+    // Version number of go-pgdump, used in the template after a dump
+    dumpVersion := "0.2.1"
 
-	// set a default value for Parallels if it is zero or less
-	if threads <= 0 {
-		threads = 50
-	}
-	return &Dumper{ConnectionString: connectionString, Parallels: threads, DumpVersion: dumpVersion}
+    // set a default value for Parallels if it is zero or less
+    if threads <= 0 {
+        threads = 50
+    }
+    return &Dumper{ConnectionString: connectionString, Parallels: threads, DumpVersion: dumpVersion}
 }
 
 func (d *Dumper) DumpDatabase(outputFile string, opts *TableOptions) error {
-	db, err := sql.Open("postgres", d.ConnectionString)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
+    db, err := sql.Open("postgres", d.ConnectionString)
+    if err != nil {
+        return err
+    }
+    defer db.Close()
 
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+    file, err := os.Create(outputFile)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
 
-	// Template variables
-	info := DumpInfo{
-		DumpVersion:   d.DumpVersion,
-		ServerVersion: getServerVersion(db),
-		CompleteTime:  time.Now().Format("2006-01-02 15:04:05 -0700 MST"),
-		ThreadsNumber: d.Parallels,
-	}
+    // Template variables
+    info := DumpInfo{
+        DumpVersion:   d.DumpVersion,
+        ServerVersion: getServerVersion(db),
+        CompleteTime:  time.Now().Format("2006-01-02 15:04:05 -0700 MST"),
+        ThreadsNumber: d.Parallels,
+    }
 
-	if err := writeHeader(file, info); err != nil {
-		return err
-	}
+    if err := writeHeader(file, info); err != nil {
+        return err
+    }
 
-	tables, err := getTables(db, opts)
-	if err != nil {
-		return err
-	}
-	
-	var (
-		wg sync.WaitGroup
-		mx sync.Mutex
-	)
+    tables, err := getTables(db, opts)
+    if err != nil {
+        return err
+    }
 
-	chunks := slices.Chunk(tables, d.Parallels)
-	for chunk := range chunks {
-		wg.Add(len(chunk))
-		for _, table := range chunk {
-			//we can add the switch here for export and add a go func here.
-			go func(table string) {
-				defer wg.Done()
-				str, err := scriptTable(db, table)
-				fmt.Printf("content table %s:\n%s\n", table, err)
-				if err != nil {
-					return
-				}
-				mx.Lock()
-				file.WriteString(str)
-				mx.Unlock()
-			}(table)
-		}
-		wg.Wait()
-	}
-	if err := writeFooter(file, info); err != nil {
-		return err
-	}
+    var (
+        wg sync.WaitGroup
+        mx sync.Mutex
+    )
 
-	return nil
+    // Chunking the tables into groups based on parallelism
+    chunks := slices.Chunk(tables, d.Parallels)
+    for _, chunk := range chunks {
+        wg.Add(len(chunk)) // Add the number of tasks for each chunk
+        for _, table := range chunk {
+            // Launch a goroutine for each table in the chunk
+            go func(table string) {
+                defer wg.Done()
+
+                // Fetch the script for the table
+                str, err := scriptTable(db, table)
+                if err != nil {
+                    fmt.Printf("Error generating script for table %s: %v\n", table, err)
+                    return
+                }
+
+                // Print the content of the table script
+                fmt.Printf("Content of table %s:\n%s\n", table, str)
+
+                // Lock to write to the file safely
+                mx.Lock()
+                file.WriteString(str)
+                mx.Unlock()
+            }(table)
+        }
+    }
+
+    // Wait for all goroutines to finish before proceeding
+    wg.Wait()
+
+    // Write footer to the file
+    if err := writeFooter(file, info); err != nil {
+        return err
+    }
+
+    return nil
 }
 
 func (d *Dumper) DumpDBToCSV(outputDIR, outputFile string, opts *TableOptions) error {
